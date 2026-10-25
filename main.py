@@ -1,3 +1,4 @@
+
 import os
 import json
 import uuid
@@ -12,10 +13,22 @@ from fastapi import FastAPI, Request
 from fastapi.responses import JSONResponse
 
 APP_VERSION = "1.0.0"
-BASE_URL = os.getenv("BASE_URL", "http://localhost:8000/a2a/")
+
+BASE_URL = os.getenv(
+    "BASE_URL",
+    "http://localhost:8000/a2a/",
+)
 DB_PATH = os.getenv("DB_PATH", "tasks.db")
-OPENAI_API_KEY = os.getenv("OPENAI_API_KEY", "")
-AI_MODEL = os.getenv("AI_MODEL", "gpt-4o-mini")
+
+# Groq configuration
+GROQ_API_KEY = os.getenv("GROQ_API_KEY", "")
+AI_MODEL = os.getenv(
+    "AI_MODEL",
+    "openai/gpt-oss-20b",
+)
+GROQ_API_URL = (
+    "https://api.groq.com/openai/v1/chat/completions"
+)
 
 A2A_TYPE = "application/a2a+json"
 BATCH_TYPE = "application/vnd.ga5.invoice-claim-batch+json"
@@ -435,6 +448,9 @@ def validate_semantic_proposals(packages, result):
     clean = []
 
     for proposal in proposals:
+        if not isinstance(proposal, dict):
+            raise ValueError("Invalid proposal")
+
         if proposal.get("action") not in ACTIONS:
             raise ValueError("Invalid action")
 
@@ -505,9 +521,9 @@ def validate_semantic_proposals(packages, result):
 
 
 async def call_model(batch):
-    if not OPENAI_API_KEY:
+    if not GROQ_API_KEY:
         raise RuntimeError(
-            "OPENAI_API_KEY is not configured"
+            "GROQ_API_KEY is not configured"
         )
 
     prompt = """
@@ -564,7 +580,7 @@ Do not execute any action. Return valid JSON only.
 
     try:
         timeout = httpx.Timeout(
-            38.0,
+            40.0,
             connect=8.0,
         )
 
@@ -572,10 +588,10 @@ Do not execute any action. Return valid JSON only.
             timeout=timeout
         ) as client:
             response = await client.post(
-                "https://api.openai.com/v1/chat/completions",
+                GROQ_API_URL,
                 headers={
                     "Authorization": (
-                        f"Bearer {OPENAI_API_KEY}"
+                        f"Bearer {GROQ_API_KEY}"
                     ),
                     "Content-Type": "application/json",
                 },
@@ -584,7 +600,7 @@ Do not execute any action. Return valid JSON only.
 
             if response.is_error:
                 print(
-                    "OpenAI API error:",
+                    "Groq API error:",
                     response.status_code,
                     response.text[:1500],
                     flush=True,
@@ -601,7 +617,7 @@ Do not execute any action. Return valid JSON only.
                 or not content.strip()
             ):
                 raise ValueError(
-                    "OpenAI returned empty content"
+                    "Groq returned empty content"
                 )
 
             decoded = json.loads(content)
@@ -616,13 +632,13 @@ Do not execute any action. Return valid JSON only.
 
     except httpx.RequestError as exc:
         print(
-            "OpenAI connection or timeout error:",
+            "Groq connection or timeout error:",
             type(exc).__name__,
             str(exc)[:500],
             flush=True,
         )
         raise RuntimeError(
-            "OpenAI request failed"
+            "Groq request failed"
         ) from exc
 
     except (
@@ -632,7 +648,7 @@ Do not execute any action. Return valid JSON only.
         IndexError,
     ) as exc:
         print(
-            "OpenAI response validation error:",
+            "Groq response validation error:",
             type(exc).__name__,
             str(exc)[:500],
             flush=True,
@@ -907,7 +923,7 @@ async def send_message(request: Request):
                 flush=True,
             )
 
-            if "OPENAI_API_KEY" in str(exc):
+            if "GROQ_API_KEY" in str(exc):
                 return a2a_json(
                     {"error": "AI service is not configured"},
                     503,
@@ -920,7 +936,7 @@ async def send_message(request: Request):
 
         except httpx.HTTPStatusError as exc:
             print(
-                "OpenAI HTTP status:",
+                "Groq HTTP status:",
                 exc.response.status_code,
                 exc.response.text[:1000],
                 flush=True,

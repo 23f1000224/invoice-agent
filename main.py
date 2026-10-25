@@ -22,13 +22,8 @@ DB_PATH = os.getenv("DB_PATH", "tasks.db")
 
 # Groq configuration
 GROQ_API_KEY = os.getenv("GROQ_API_KEY", "")
-AI_MODEL = os.getenv(
-    "AI_MODEL",
-    "openai/gpt-oss-20b",
-)
-GROQ_API_URL = (
-    "https://api.groq.com/openai/v1/chat/completions"
-)
+AI_MODEL = os.getenv("AI_MODEL", "openai/gpt-oss-20b")
+GROQ_API_URL = "https://api.groq.com/openai/v1/chat/completions"
 
 A2A_TYPE = "application/a2a+json"
 BATCH_TYPE = "application/vnd.ga5.invoice-claim-batch+json"
@@ -52,8 +47,6 @@ TERMINAL_STATES = {
 }
 
 app = FastAPI(title="A2A Invoice Agent")
-
-# Use one server worker in deployment.
 INITIAL_LOCK = asyncio.Lock()
 
 
@@ -151,10 +144,7 @@ init_db()
 
 
 def part(media_type, data):
-    return {
-        "mediaType": media_type,
-        "data": data,
-    }
+    return {"mediaType": media_type, "data": data}
 
 
 def make_task(
@@ -241,11 +231,7 @@ def get_owned_task(con, task_id, principal):
 
 
 def user_message(body):
-    message = (
-        body.get("message")
-        if isinstance(body, dict)
-        else None
-    )
+    message = body.get("message") if isinstance(body, dict) else None
 
     if not isinstance(message, dict):
         raise ValueError("Missing message")
@@ -255,10 +241,7 @@ def user_message(body):
 
     message_id = message.get("messageId")
 
-    if (
-        not isinstance(message_id, str)
-        or not message_id.strip()
-    ):
+    if not isinstance(message_id, str) or not message_id.strip():
         raise ValueError("Missing messageId")
 
     if not isinstance(message.get("parts"), list):
@@ -285,8 +268,6 @@ def find_data_part(message, expected_type):
 
 
 def get_principal(request):
-    # Each distinct Bearer token is a separate principal.
-    # Only the token hash is stored.
     auth = request.headers.get("authorization", "")
 
     if not auth.startswith("Bearer "):
@@ -301,22 +282,16 @@ def get_principal(request):
     ):
         return None
 
-    return hashlib.sha256(
-        token.encode("utf-8")
-    ).hexdigest()
+    return hashlib.sha256(token.encode("utf-8")).hexdigest()
 
 
 @app.middleware("http")
 async def protocol_checks(request: Request, call_next):
-    # The Agent Card is public.
     if request.url.path == "/.well-known/agent-card.json":
         return await call_next(request)
 
     if request.headers.get("A2A-Version") != "1.0":
-        return a2a_json(
-            {"error": "Unsupported A2A version"},
-            400,
-        )
+        return a2a_json({"error": "Unsupported A2A version"}, 400)
 
     if request.method == "POST":
         content_type = (
@@ -326,16 +301,10 @@ async def protocol_checks(request: Request, call_next):
         )
 
         if content_type != A2A_TYPE:
-            return a2a_json(
-                {"error": "Unsupported media type"},
-                415,
-            )
+            return a2a_json({"error": "Unsupported media type"}, 415)
 
     if get_principal(request) is None:
-        return a2a_json(
-            {"error": "Unauthorized"},
-            401,
-        )
+        return a2a_json({"error": "Unauthorized"}, 401)
 
     response = await call_next(request)
 
@@ -366,22 +335,15 @@ def agent_card():
                 "protocolVersion": "1.0",
             }
         ],
-        "defaultInputModes": [
-            BATCH_TYPE,
-            RESULTS_TYPE,
-        ],
-        "defaultOutputModes": [
-            PROPOSALS_TYPE,
-            RECEIPTS_TYPE,
-        ],
+        "defaultInputModes": [BATCH_TYPE, RESULTS_TYPE],
+        "defaultOutputModes": [PROPOSALS_TYPE, RECEIPTS_TYPE],
         "skills": [
             {
                 "id": "invoice_action_agent",
                 "name": "Invoice Action Agent",
                 "description": (
-                    "Reviews invoice evidence and proposes "
-                    "controlled business actions, then "
-                    "records accepted receipts."
+                    "Reviews invoice evidence and proposes controlled "
+                    "business actions, then records accepted receipts."
                 ),
                 "tags": [
                     "invoice",
@@ -395,7 +357,6 @@ def agent_card():
 
 
 def package_content(package):
-    # Ignore packageId when computing semantic cache keys.
     return {
         key: value
         for key, value in package.items()
@@ -420,29 +381,18 @@ def validate_semantic_proposals(packages, result):
         raise ValueError("Proposal count mismatch")
 
     package_ids = [
-        package.get("packageId")
-        if isinstance(package, dict)
-        else None
+        package.get("packageId") if isinstance(package, dict) else None
         for package in packages
     ]
-
     proposal_ids = [
-        proposal.get("packageId")
-        if isinstance(proposal, dict)
-        else None
+        proposal.get("packageId") if isinstance(proposal, dict) else None
         for proposal in proposals
     ]
 
-    if any(
-        not isinstance(package_id, str) or not package_id
-        for package_id in package_ids
-    ):
+    if any(not isinstance(pid, str) or not pid for pid in package_ids):
         raise ValueError("Invalid package ID")
 
-    if (
-        len(set(package_ids)) != len(package_ids)
-        or package_ids != proposal_ids
-    ):
+    if len(set(package_ids)) != len(package_ids) or package_ids != proposal_ids:
         raise ValueError("Package IDs or order mismatch")
 
     clean = []
@@ -459,15 +409,8 @@ def validate_semantic_proposals(packages, result):
         if not isinstance(facts, dict):
             raise ValueError("Invalid facts")
 
-        for field in (
-            "vendorName",
-            "invoiceNumber",
-            "currency",
-        ):
-            if (
-                not isinstance(facts.get(field), str)
-                or not facts[field].strip()
-            ):
+        for field in ("vendorName", "invoiceNumber", "currency"):
+            if not isinstance(facts.get(field), str) or not facts[field].strip():
                 raise ValueError("Missing invoice facts")
 
         amount = facts.get("amountMinor")
@@ -484,10 +427,7 @@ def validate_semantic_proposals(packages, result):
         if (
             not isinstance(refs, list)
             or len(refs) != 3
-            or any(
-                not isinstance(ref, str) or not ref.strip()
-                for ref in refs
-            )
+            or any(not isinstance(ref, str) or not ref.strip() for ref in refs)
             or len(set(refs)) != 3
         ):
             raise ValueError(
@@ -496,15 +436,10 @@ def validate_semantic_proposals(packages, result):
 
         rationale = proposal.get("rationale")
 
-        if (
-            not isinstance(rationale, str)
-            or not 60 <= len(rationale) <= 1500
-        ):
+        if not isinstance(rationale, str) or not 60 <= len(rationale) <= 1500:
             raise ValueError("Invalid rationale length")
 
-        if sum(
-            ref in rationale for ref in refs
-        ) < 2:
+        if sum(ref in rationale for ref in refs) < 2:
             raise ValueError(
                 "Rationale must cite at least two evidence references"
             )
@@ -522,9 +457,7 @@ def validate_semantic_proposals(packages, result):
 
 async def call_model(batch):
     if not GROQ_API_KEY:
-        raise RuntimeError(
-            "GROQ_API_KEY is not configured"
-        )
+        raise RuntimeError("GROQ_API_KEY is not configured")
 
     prompt = """
 You are an evidence-based invoice decision agent.
@@ -544,7 +477,7 @@ evidenceRefs must contain exactly the three decisive bracketed references
 from the paragraph that determines the action. Do not use cover-sheet,
 archive or training-decoy references.
 
-rationale must be 60-300 characters, name the chosen action,
+rationale must be 60-180 characters, name the chosen action,
 and cite at least two of the three evidence references.
 
 Allowed actions:
@@ -562,37 +495,23 @@ Do not execute any action. Return valid JSON only.
     payload = {
         "model": AI_MODEL,
         "temperature": 0,
-        "max_tokens": 6000,
-        "response_format": {
-            "type": "json_object",
-        },
+        # Lower this from 6000 to fit the observed Groq TPM limit.
+        "max_tokens": 2400,
+        "response_format": {"type": "json_object"},
         "messages": [
-            {
-                "role": "system",
-                "content": prompt,
-            },
-            {
-                "role": "user",
-                "content": canonical(batch),
-            },
+            {"role": "system", "content": prompt},
+            {"role": "user", "content": canonical(batch)},
         ],
     }
 
     try:
-        timeout = httpx.Timeout(
-            40.0,
-            connect=8.0,
-        )
+        timeout = httpx.Timeout(40.0, connect=8.0)
 
-        async with httpx.AsyncClient(
-            timeout=timeout
-        ) as client:
+        async with httpx.AsyncClient(timeout=timeout) as client:
             response = await client.post(
                 GROQ_API_URL,
                 headers={
-                    "Authorization": (
-                        f"Bearer {GROQ_API_KEY}"
-                    ),
+                    "Authorization": f"Bearer {GROQ_API_KEY}",
                     "Content-Type": "application/json",
                 },
                 json=payload,
@@ -608,24 +527,14 @@ Do not execute any action. Return valid JSON only.
                 response.raise_for_status()
 
             response_data = response.json()
-            content = response_data[
-                "choices"
-            ][0]["message"]["content"]
+            content = response_data["choices"][0]["message"]["content"]
 
-            if (
-                not isinstance(content, str)
-                or not content.strip()
-            ):
-                raise ValueError(
-                    "Groq returned empty content"
-                )
+            if not isinstance(content, str) or not content.strip():
+                raise ValueError("Groq returned empty content")
 
             decoded = json.loads(content)
 
-        return validate_semantic_proposals(
-            batch["packages"],
-            decoded,
-        )
+        return validate_semantic_proposals(batch["packages"], decoded)
 
     except httpx.HTTPStatusError:
         raise
@@ -637,16 +546,9 @@ Do not execute any action. Return valid JSON only.
             str(exc)[:500],
             flush=True,
         )
-        raise RuntimeError(
-            "Groq request failed"
-        ) from exc
+        raise RuntimeError("Groq request failed") from exc
 
-    except (
-        KeyError,
-        TypeError,
-        ValueError,
-        IndexError,
-    ) as exc:
+    except (KeyError, TypeError, ValueError, IndexError) as exc:
         print(
             "Groq response validation error:",
             type(exc).__name__,
@@ -677,9 +579,7 @@ async def get_batch_proposals(batch):
             ).fetchone()
 
             if row:
-                cached[package["packageId"]] = json.loads(
-                    row["decision_json"]
-                )
+                cached[package["packageId"]] = json.loads(row["decision_json"])
             else:
                 missing.append(package)
 
@@ -690,16 +590,12 @@ async def get_batch_proposals(batch):
             "packages": missing,
         }
 
-        # One model request for all cache misses.
         decisions = await call_model(model_batch)
 
         with db() as con:
             con.execute("BEGIN IMMEDIATE")
 
-            for package, decision in zip(
-                missing,
-                decisions,
-            ):
+            for package, decision in zip(missing, decisions):
                 key = keys[package["packageId"]]
 
                 semantic = {
@@ -716,15 +612,9 @@ async def get_batch_proposals(batch):
                     )
                     VALUES(?,?,?)
                     """,
-                    (
-                        key,
-                        canonical(semantic),
-                        now(),
-                    ),
+                    (key, canonical(semantic), now()),
                 )
 
-                # Read back the canonical cached decision in case
-                # another process inserted it first.
                 row = con.execute(
                     """
                     SELECT decision_json
@@ -734,9 +624,7 @@ async def get_batch_proposals(batch):
                     (key,),
                 ).fetchone()
 
-                cached[package["packageId"]] = json.loads(
-                    row["decision_json"]
-                )
+                cached[package["packageId"]] = json.loads(row["decision_json"])
 
             con.commit()
 
@@ -754,10 +642,7 @@ async def get_batch_proposals(batch):
             "rationale": semantic["rationale"],
         })
 
-    return {
-        "batchId": batch["batchId"],
-        "proposals": proposals,
-    }
+    return {"batchId": batch["batchId"], "proposals": proposals}
 
 
 def find_artifact(task, media_type):
@@ -778,20 +663,14 @@ def replay_response(con, principal, message):
         FROM messages
         WHERE principal=? AND message_id=?
         """,
-        (
-            principal,
-            message["messageId"],
-        ),
+        (principal, message["messageId"]),
     ).fetchone()
 
     if row is None:
         return None
 
     if row["message_hash"] != digest(message):
-        return a2a_json(
-            {"error": "IDEMPOTENCY_CONFLICT"},
-            409,
-        )
+        return a2a_json({"error": "IDEMPOTENCY_CONFLICT"}, 409)
 
     task_row = con.execute(
         """
@@ -799,21 +678,13 @@ def replay_response(con, principal, message):
         FROM tasks
         WHERE id=? AND principal=?
         """,
-        (
-            row["task_id"],
-            principal,
-        ),
+        (row["task_id"], principal),
     ).fetchone()
 
     if task_row is None:
-        return a2a_json(
-            {"error": "Task unavailable"},
-            409,
-        )
+        return a2a_json({"error": "Task unavailable"}, 409)
 
-    return a2a_json({
-        "task": json.loads(task_row["task_json"]),
-    })
+    return a2a_json({"task": json.loads(task_row["task_json"])})
 
 
 @app.post("/a2a/message:send")
@@ -824,48 +695,28 @@ async def send_message(request: Request):
         body = await request.json()
         message = user_message(body)
     except (ValueError, json.JSONDecodeError):
-        return a2a_json(
-            {"error": "Invalid request"},
-            400,
-        )
+        return a2a_json({"error": "Invalid request"}, 400)
 
     if message.get("taskId") is not None:
-        return await continue_task(
-            message,
-            principal,
-        )
+        return await continue_task(message, principal)
 
     async with INITIAL_LOCK:
-        # Check idempotency before model processing.
         with db() as con:
             con.execute("BEGIN IMMEDIATE")
-            replay = replay_response(
-                con,
-                principal,
-                message,
-            )
+            replay = replay_response(con, principal, message)
             con.commit()
 
         if replay is not None:
             return replay
 
         try:
-            batch = find_data_part(
-                message,
-                BATCH_TYPE,
-            )
+            batch = find_data_part(message, BATCH_TYPE)
 
-            if (
-                not isinstance(batch.get("batchId"), str)
-                or not batch["batchId"].strip()
-            ):
+            if not isinstance(batch.get("batchId"), str) or not batch["batchId"].strip():
                 raise ValueError("Missing batchId")
 
             if (
-                not isinstance(
-                    batch.get("policyRevision"),
-                    str,
-                )
+                not isinstance(batch.get("policyRevision"), str)
                 or not batch["policyRevision"].strip()
             ):
                 raise ValueError("Missing policyRevision")
@@ -875,22 +726,12 @@ async def send_message(request: Request):
             if not isinstance(packages, list) or not packages:
                 raise ValueError("Missing packages")
 
-            if any(
-                not isinstance(package, dict)
-                for package in packages
-            ):
+            if any(not isinstance(package, dict) for package in packages):
                 raise ValueError("Invalid package")
 
-            package_ids = [
-                package.get("packageId")
-                for package in packages
-            ]
+            package_ids = [package.get("packageId") for package in packages]
 
-            if any(
-                not isinstance(package_id, str)
-                or not package_id
-                for package_id in package_ids
-            ):
+            if any(not isinstance(pid, str) or not pid for pid in package_ids):
                 raise ValueError("Missing packageId")
 
             if len(set(package_ids)) != len(package_ids):
@@ -899,40 +740,24 @@ async def send_message(request: Request):
             if len(packages) > 100:
                 raise ValueError("Too many packages")
 
-            context_id = (
-                message.get("contextId")
-                or new_id()
-            )
+            context_id = message.get("contextId") or new_id()
 
             if not isinstance(context_id, str):
                 raise ValueError("Invalid contextId")
 
         except (ValueError, KeyError, TypeError):
-            return a2a_json(
-                {"error": "Invalid request"},
-                400,
-            )
+            return a2a_json({"error": "Invalid request"}, 400)
 
         try:
             proposals = await get_batch_proposals(batch)
 
         except RuntimeError as exc:
-            print(
-                "AI runtime error:",
-                repr(exc),
-                flush=True,
-            )
+            print("AI runtime error:", repr(exc), flush=True)
 
             if "GROQ_API_KEY" in str(exc):
-                return a2a_json(
-                    {"error": "AI service is not configured"},
-                    503,
-                )
+                return a2a_json({"error": "AI service is not configured"}, 503)
 
-            return a2a_json(
-                {"error": "AI decision failed"},
-                502,
-            )
+            return a2a_json({"error": "AI decision failed"}, 502)
 
         except httpx.HTTPStatusError as exc:
             print(
@@ -941,11 +766,7 @@ async def send_message(request: Request):
                 exc.response.text[:1000],
                 flush=True,
             )
-
-            return a2a_json(
-                {"error": "AI decision failed"},
-                502,
-            )
+            return a2a_json({"error": "AI decision failed"}, 502)
 
         except Exception as exc:
             print(
@@ -954,11 +775,7 @@ async def send_message(request: Request):
                 str(exc)[:1000],
                 flush=True,
             )
-
-            return a2a_json(
-                {"error": "AI decision failed"},
-                502,
-            )
+            return a2a_json({"error": "AI decision failed"}, 502)
 
         task_id = new_id()
 
@@ -970,12 +787,7 @@ async def send_message(request: Request):
             [
                 {
                     "name": "Invoice action proposals",
-                    "parts": [
-                        part(
-                            PROPOSALS_TYPE,
-                            proposals,
-                        )
-                    ],
+                    "parts": [part(PROPOSALS_TYPE, proposals)],
                 }
             ],
         )
@@ -983,12 +795,7 @@ async def send_message(request: Request):
         with db() as con:
             con.execute("BEGIN IMMEDIATE")
 
-            # Final idempotency check.
-            replay = replay_response(
-                con,
-                principal,
-                message,
-            )
+            replay = replay_response(con, principal, message)
 
             if replay is not None:
                 con.commit()
@@ -1009,13 +816,7 @@ async def send_message(request: Request):
                 ),
             )
 
-            insert_task(
-                con,
-                task,
-                principal,
-                batch["batchId"],
-            )
-
+            insert_task(con, task, principal, batch["batchId"])
             con.commit()
 
         return a2a_json({"task": task})
@@ -1025,12 +826,7 @@ async def continue_task(message, principal):
     with db() as con:
         con.execute("BEGIN IMMEDIATE")
 
-        # Replays are checked before continuation validation.
-        replay = replay_response(
-            con,
-            principal,
-            message,
-        )
+        replay = replay_response(con, principal, message)
 
         if replay is not None:
             con.commit()
@@ -1039,78 +835,41 @@ async def continue_task(message, principal):
         task_id = message.get("taskId")
         context_id = message.get("contextId")
 
-        if (
-            not isinstance(task_id, str)
-            or not isinstance(context_id, str)
-        ):
+        if not isinstance(task_id, str) or not isinstance(context_id, str):
             con.rollback()
-            return a2a_json(
-                {"error": "Invalid continuation"},
-                400,
-            )
+            return a2a_json({"error": "Invalid continuation"}, 400)
 
-        owned = get_owned_task(
-            con,
-            task_id,
-            principal,
-        )
+        owned = get_owned_task(con, task_id, principal)
 
         if not owned:
             con.rollback()
-            return a2a_json(
-                {"error": "Task not found"},
-                404,
-            )
+            return a2a_json({"error": "Task not found"}, 404)
 
         row, task = owned
 
         if task["contextId"] != context_id:
             con.rollback()
-            return a2a_json(
-                {"error": "Invalid continuation"},
-                409,
-            )
+            return a2a_json({"error": "Invalid continuation"}, 409)
 
         if task["status"]["state"] in TERMINAL_STATES:
             con.rollback()
-            return a2a_json(
-                {"error": "Task is terminal"},
-                409,
-            )
+            return a2a_json({"error": "Task is terminal"}, 409)
 
         try:
-            results_data = find_data_part(
-                message,
-                RESULTS_TYPE,
-            )
+            results_data = find_data_part(message, RESULTS_TYPE)
         except ValueError:
             con.rollback()
-            return a2a_json(
-                {"error": "Invalid continuation"},
-                400,
-            )
+            return a2a_json({"error": "Invalid continuation"}, 400)
 
         if results_data.get("batchId") != row["batch_id"]:
             con.rollback()
-            return a2a_json(
-                {"error": "Batch mismatch"},
-                409,
-            )
+            return a2a_json({"error": "Batch mismatch"}, 409)
 
-        proposal_parts = find_artifact(
-            task,
-            PROPOSALS_TYPE,
-        )
+        proposal_parts = find_artifact(task, PROPOSALS_TYPE)
 
-        if (
-            len(proposal_parts) != 1
-            or not isinstance(proposal_parts[0], dict)
-        ):
+        if len(proposal_parts) != 1 or not isinstance(proposal_parts[0], dict):
             con.rollback()
-            return a2a_json(
-                {"error": "Invalid stored Task"},
-                409,
-            )
+            return a2a_json({"error": "Invalid stored Task"}, 409)
 
         proposals = proposal_parts[0].get("proposals")
         incoming = results_data.get("results")
@@ -1121,10 +880,7 @@ async def continue_task(message, principal):
             or len(incoming) != len(proposals)
         ):
             con.rollback()
-            return a2a_json(
-                {"error": "Result count mismatch"},
-                409,
-            )
+            return a2a_json({"error": "Result count mismatch"}, 409)
 
         by_package = {
             proposal.get("packageId"): proposal
@@ -1134,10 +890,7 @@ async def continue_task(message, principal):
 
         if len(by_package) != len(proposals):
             con.rollback()
-            return a2a_json(
-                {"error": "Invalid stored Task"},
-                409,
-            )
+            return a2a_json({"error": "Invalid stored Task"}, 409)
 
         seen = set()
         executions = []
@@ -1145,10 +898,7 @@ async def continue_task(message, principal):
         for result in incoming:
             if not isinstance(result, dict):
                 con.rollback()
-                return a2a_json(
-                    {"error": "Invalid result"},
-                    400,
-                )
+                return a2a_json({"error": "Invalid result"}, 400)
 
             package_id = result.get("packageId")
             proposal = by_package.get(package_id)
@@ -1156,23 +906,14 @@ async def continue_task(message, principal):
             if (
                 proposal is None
                 or package_id in seen
-                or result.get("actionId")
-                != proposal.get("actionId")
-                or result.get("action")
-                != proposal.get("action")
-                or result.get("outcome")
-                not in ("ACCEPTED", "REJECTED")
-                or not isinstance(
-                    result.get("receiptNonce"),
-                    str,
-                )
+                or result.get("actionId") != proposal.get("actionId")
+                or result.get("action") != proposal.get("action")
+                or result.get("outcome") not in ("ACCEPTED", "REJECTED")
+                or not isinstance(result.get("receiptNonce"), str)
                 or not result["receiptNonce"].strip()
             ):
                 con.rollback()
-                return a2a_json(
-                    {"error": "Result mismatch"},
-                    409,
-                )
+                return a2a_json({"error": "Result mismatch"}, 409)
 
             seen.add(package_id)
 
@@ -1188,15 +929,9 @@ async def continue_task(message, principal):
 
         if len(seen) != len(proposals):
             con.rollback()
-            return a2a_json(
-                {"error": "Missing results"},
-                409,
-            )
+            return a2a_json({"error": "Missing results"}, 409)
 
-        # The transaction lock ensures cancel/result changes cannot
-        # simultaneously update the same nonterminal task.
         task.setdefault("history", []).append(message)
-
         task["status"] = {
             "state": "TASK_STATE_COMPLETED",
             "timestamp": now(),
@@ -1239,7 +974,6 @@ async def continue_task(message, principal):
         )
 
         con.commit()
-
         return a2a_json({"task": task})
 
 
@@ -1259,10 +993,7 @@ def list_tasks(request: Request):
         ).fetchall()
 
     return a2a_json({
-        "tasks": [
-            json.loads(row["task_json"])
-            for row in rows
-        ],
+        "tasks": [json.loads(row["task_json"]) for row in rows],
     })
 
 
@@ -1271,17 +1002,10 @@ def read_task(task_id: str, request: Request):
     principal = get_principal(request)
 
     with db() as con:
-        owned = get_owned_task(
-            con,
-            task_id,
-            principal,
-        )
+        owned = get_owned_task(con, task_id, principal)
 
     if not owned:
-        return a2a_json(
-            {"error": "Task not found"},
-            404,
-        )
+        return a2a_json({"error": "Task not found"}, 404)
 
     return a2a_json(owned[1])
 
@@ -1293,27 +1017,17 @@ def cancel_task(task_id: str, request: Request):
     with db() as con:
         con.execute("BEGIN IMMEDIATE")
 
-        owned = get_owned_task(
-            con,
-            task_id,
-            principal,
-        )
+        owned = get_owned_task(con, task_id, principal)
 
         if not owned:
             con.rollback()
-            return a2a_json(
-                {"error": "Task not found"},
-                404,
-            )
+            return a2a_json({"error": "Task not found"}, 404)
 
         row, task = owned
 
         if task["status"]["state"] in TERMINAL_STATES:
             con.rollback()
-            return a2a_json(
-                {"error": "Task is terminal"},
-                409,
-            )
+            return a2a_json({"error": "Task is terminal"}, 409)
 
         task["status"] = {
             "state": "TASK_STATE_CANCELED",
@@ -1329,5 +1043,4 @@ def cancel_task(task_id: str, request: Request):
         )
 
         con.commit()
-
         return a2a_json(task)

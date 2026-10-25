@@ -298,9 +298,9 @@ from collections import deque
 
 _GROQ_WINDOW = deque()  # (monotonic timestamp, estimated tokens reserved)
 _GROQ_WINDOW_LOCK = asyncio.Lock()
-_GROQ_TPM_BUDGET = 7400  # leave margin below the documented 8,000 TPM limit
-_GROQ_MAX_COMPLETION = 900
-_GROQ_MAX_BATCH_CHARS = 7000
+_GROQ_TPM_BUDGET = 6000  # leave margin below the documented 8,000 TPM limit
+_GROQ_MAX_COMPLETION = 500
+_GROQ_MAX_BATCH_CHARS = 2000
 
 
 def _estimate_tokens(text):

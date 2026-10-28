@@ -392,7 +392,7 @@ async def call_model(batch: dict) -> list:
         "temperature": 0,
         # Avoid Groq's JSON constrained-decoding validation failure. Validate
         # the returned JSON ourselves before accepting any proposal.
-        "max_tokens": int(os.getenv("AI_MAX_TOKENS", "8192")),
+        "max_tokens": int(os.getenv("AI_MAX_TOKENS", "3500")),
         "messages": [
             {"role": "system", "content": PROMPT},
             {"role": "user", "content": user_content},

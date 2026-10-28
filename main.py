@@ -356,7 +356,7 @@ Return one JSON object:
   "action":"one allowed action",
   "facts":{"vendorName":"...","invoiceNumber":"...","amountMinor":12345,"currency":"INR"},
   "evidenceRefs":["[exact ref 1]","[exact ref 2]","[exact ref 3]"],
-  "rationale":"60-1500 characters, name the action and cite at least two refs"}
+  "rationale":"60-250 characters, name the action and cite at least two refs"}
 ]}
 
 Actions:
@@ -375,7 +375,7 @@ Rules:
 - evidenceRefs must be exactly the three decisive bracketed references from
   the paragraph determining the action. Never use cover-sheet references,
   archive examples, or training decoys.
-- Cite at least two of those exact references in rationale.
+- Keep each rationale concise: 60-250 characters. Cite at least two of those exact references.
 - Do not invent references, facts, policy terms, or actions.
 - Do not execute payments and do not invent receipt nonces.
 - Return valid JSON only, no Markdown fences.
@@ -392,7 +392,7 @@ async def call_model(batch: dict) -> list:
         "temperature": 0,
         # Avoid Groq's JSON constrained-decoding validation failure. Validate
         # the returned JSON ourselves before accepting any proposal.
-        "max_tokens": int(os.getenv("AI_MAX_TOKENS", "3500")),
+        "max_tokens": 2500,
         "messages": [
             {"role": "system", "content": PROMPT},
             {"role": "user", "content": user_content},
@@ -409,6 +409,19 @@ async def call_model(batch: dict) -> list:
                 },
                 json=payload,
             )
+            # A 413 means this request is too large for the model's TPM budget.
+            # Retry once with a smaller completion cap, using the still-open client.
+            if response.status_code == 413:
+                retry_payload = dict(payload)
+                retry_payload["max_tokens"] = 1800
+                response = await client.post(
+                    GROQ_URL,
+                    headers={
+                        "Authorization": f"Bearer {GROQ_API_KEY}",
+                        "Content-Type": "application/json",
+                    },
+                    json=retry_payload,
+                )
         if response.status_code >= 400:
             print("Groq API error", response.status_code, response.text[:800])
             raise RuntimeError("AI provider request failed")

@@ -190,8 +190,9 @@ def get_principal(request: Request):
 
 @app.middleware("http")
 async def protocol_checks(request: Request, call_next):
-    # The discovery card is public and does not require A2A headers.
-    if request.url.path == "/.well-known/agent-card.json":
+    # Public infrastructure endpoints must work without A2A protocol headers.
+    # Render health checks do not send A2A-Version or a Bearer token.
+    if request.url.path in {"/.well-known/agent-card.json", "/healthz"}:
         return await call_next(request)
 
     if request.headers.get("A2A-Version") != "1.0":

@@ -192,7 +192,7 @@ def get_principal(request: Request):
 async def protocol_checks(request: Request, call_next):
     # Public infrastructure endpoints must work without A2A protocol headers.
     # Render health checks do not send A2A-Version or a Bearer token.
-    if request.url.path in {"/.well-known/agent-card.json", "/healthz"}:
+    if request.url.path in {"/", "/.well-known/agent-card.json", "/healthz"}:
         return await call_next(request)
 
     if request.headers.get("A2A-Version") != "1.0":
@@ -216,6 +216,17 @@ async def protocol_checks(request: Request, call_next):
     if request.url.path.startswith("/a2a/"):
         response.headers["content-type"] = f"{A2A_TYPE}; charset=utf-8"
     return response
+
+
+@app.get("/")
+def root():
+    """Simple public landing endpoint for browser and platform probes."""
+    return {
+        "name": "Invoice Action Agent",
+        "status": "ok",
+        "agent_card": "/.well-known/agent-card.json",
+        "health": "/healthz",
+    }
 
 
 @app.get("/.well-known/agent-card.json")

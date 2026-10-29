@@ -383,49 +383,69 @@ Rules:
 """
 
 
-async def call_model(batch: dict) -> list:
+async def _call_model_once(batch: dict, max_tokens: int = 900) -> list:
+    """Call Groq for one small group of packages."""
     if not GROQ_API_KEY:
         raise RuntimeError("GROQ_API_KEY is not configured")
 
-    user_content = canonical(batch)
     payload = {
         "model": AI_MODEL,
         "temperature": 0,
-        # Avoid Groq's JSON constrained-decoding validation failure. Validate
-        # the returned JSON ourselves before accepting any proposal.
-        "max_tokens": 2500,
+        # A proposal is short. Keeping this low avoids reserving most of the
+        # free-tier 8K TPM budget for output that we do not need.
+        "max_tokens": max_tokens,
         "messages": [
             {"role": "system", "content": PROMPT},
-            {"role": "user", "content": user_content},
+            {"role": "user", "content": canonical(batch)},
         ],
     }
 
     async with MODEL_LOCK:
         async with httpx.AsyncClient(timeout=MODEL_TIMEOUT_SECONDS) as client:
-            response = await client.post(
-                GROQ_URL,
-                headers={
-                    "Authorization": f"Bearer {GROQ_API_KEY}",
-                    "Content-Type": "application/json",
-                },
-                json=payload,
-            )
-            # A 413 means this request is too large for the model's TPM budget.
-            # Retry once with a smaller completion cap, using the still-open client.
-            if response.status_code == 413:
-                retry_payload = dict(payload)
-                retry_payload["max_tokens"] = 1800
+            response = None
+            for attempt in range(3):
                 response = await client.post(
                     GROQ_URL,
                     headers={
                         "Authorization": f"Bearer {GROQ_API_KEY}",
                         "Content-Type": "application/json",
                     },
-                    json=retry_payload,
+                    json=payload,
                 )
-        if response.status_code >= 400:
-            print("Groq API error", response.status_code, response.text[:800])
-            raise RuntimeError("AI provider request failed")
+                if response.status_code != 429 or attempt == 2:
+                    break
+                # Groq documents retry-after for 429 responses. Bound the wait
+                # so one request cannot hang indefinitely.
+                retry_after = response.headers.get("retry-after", "2")
+                try:
+                    wait_seconds = min(max(float(retry_after), 1.0), 8.0)
+                except (TypeError, ValueError):
+                    wait_seconds = 2.0
+                await asyncio.sleep(wait_seconds)
+
+            if response.status_code == 413 and max_tokens > 500:
+                # A smaller completion reservation can resolve a request that
+                # is just over the TPM budget. If not, the caller splits it.
+                smaller_payload = dict(payload)
+                smaller_payload["max_tokens"] = 500
+                response = await client.post(
+                    GROQ_URL,
+                    headers={
+                        "Authorization": f"Bearer {GROQ_API_KEY}",
+                        "Content-Type": "application/json",
+                    },
+                    json=smaller_payload,
+                )
+
+    if response.status_code >= 400:
+        # Log the provider's status and a short body for Render diagnostics,
+        # but never return credentials or provider internals to the caller.
+        print("Groq API error", response.status_code, response.text[:500])
+        if response.status_code == 413:
+            raise RuntimeError("Groq request exceeds the available token budget")
+        if response.status_code == 429:
+            raise RuntimeError("Groq rate limit reached")
+        raise RuntimeError("AI provider request failed")
 
     try:
         data = response.json()
@@ -452,6 +472,71 @@ async def call_model(batch: dict) -> list:
 
     return validate_semantic_proposals(batch["packages"], decoded)
 
+
+async def call_model(batch: dict) -> list:
+    """
+    Send a batch in bounded groups. Packages are never split, so their
+    evidence remains intact. If Groq still returns 413, recursively subdivide
+    the group and retry. The returned decisions preserve original order.
+    """
+    packages = batch.get("packages")
+    if not isinstance(packages, list) or not packages:
+        raise RuntimeError("Empty model batch")
+
+    # Keep the serialized input well below the free-tier 8K TPM ceiling.
+    # The system prompt and completion reservation also consume tokens.
+    max_group_chars = 9000
+    max_packages_per_call = 4
+    groups = []
+    current = []
+    current_chars = 2  # brackets in the JSON array
+
+    for package in packages:
+        package_chars = len(canonical(package)) + (1 if current else 0)
+        if current and (
+            current_chars + package_chars > max_group_chars
+            or len(current) >= max_packages_per_call
+        ):
+            groups.append(current)
+            current = []
+            current_chars = 2
+            package_chars = len(canonical(package))
+        current.append(package)
+        current_chars += package_chars
+
+    if current:
+        groups.append(current)
+
+    async def decide_group(group: list) -> list:
+        group_batch = {
+            "batchId": batch.get("batchId"),
+            "policyRevision": batch.get("policyRevision"),
+            "packages": group,
+        }
+        try:
+            return await _call_model_once(group_batch, max_tokens=900)
+        except RuntimeError as exc:
+            # A 413 for multiple packages is recoverable by splitting the
+            # package list. A single oversized package cannot safely be
+            # truncated because its decisive evidence might be lost.
+            if "token budget" not in str(exc).lower() or len(group) <= 1:
+                raise
+            midpoint = len(group) // 2
+            left = await decide_group(group[:midpoint])
+            right = await decide_group(group[midpoint:])
+            return left + right
+
+    decisions = []
+    for group in groups:
+        decisions.extend(await decide_group(group))
+
+    # Guard against a future grouping change that accidentally reorders or
+    # loses a proposal.
+    expected_ids = [p.get("packageId") for p in packages]
+    actual_ids = [d.get("packageId") for d in decisions]
+    if actual_ids != expected_ids:
+        raise RuntimeError("Model proposal order mismatch")
+    return decisions
 
 async def get_batch_proposals(batch: dict) -> dict:
     packages = batch["packages"]
